@@ -1,7 +1,7 @@
 # nutshell
 A tiny python library for deep learning
 
-##Summary
+## Summary
 
 A small python library to help reduce the coding and debugging time required to build and train a Keras deep learning model.
 
