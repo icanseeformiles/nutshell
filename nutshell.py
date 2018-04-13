@@ -1,9 +1,10 @@
 import numpy as np
 import pandas as pd
+
 from keras.layers import Dense, Embedding, Dropout, Reshape, Merge, Input, LSTM, concatenate
 from keras.layers import TimeDistributed
 from keras.models import Sequential, Model 
-from keras.optimizers import Adamax
+from keras.optimizers import Adam, Adamax
 from keras.callbacks import EarlyStopping, ModelCheckpoint
 from keras.preprocessing import sequence
 
@@ -12,8 +13,6 @@ class LearningData:
     def __init__(self, inputdata = pd.DataFrame()):
         self.inputdata = inputdata 
         self.prepdata = pd.DataFrame()
-        #self.trainingdata = pd.DataFrame()
-        #self.validationdata = pd.DataFrame()
         self.trainingfeatures = []
         self.traininglabels = []
         self.validationfeatures = []
@@ -143,16 +142,21 @@ class LearningData:
     def dataframe_to_input(self, dataframe):
         # convert each dataframe column to a seperate numpy array in a list suitable for keras input tensor
         # for sequence columns, truncate/pad each value to uniform length 
+        # pad value is 0 because we defined that in our valueindex dictionary (0 = padding; 1 = unknown)
+        # dont forget to set sequencelength before calling this!
         
         input_list = []
         for col in dataframe:
             if col in self.sequencecolumns:
-                input_list.append(sequence.pad_sequences(dataframe[col], maxlen=self.sequencelength, \
-                                  padding='post', value=0))
+                padseq = sequence.pad_sequences(dataframe[col].values, maxlen=self.sequencelength, \
+                                  padding='post', truncating='post', value=0)
+                input_list.append(padseq)
+
             else:
-                input_list.append(np.array(col))
+                input_list.append(dataframe[col].values)
             
         return input_list 
+
     
     def split_data(self, shuffle=False):
         
@@ -186,12 +190,12 @@ class LearningData:
             
         # convert dataframe values to keras input
         self.trainingfeatures = self.dataframe_to_input(trainingData[featureNames])
-        self.traininglabels = self.dataframe_to_input(trainingData[self.labelcolumn])
+        self.traininglabels = self.dataframe_to_input(trainingData[[self.labelcolumn]])
         self.validationfeatures = self.dataframe_to_input(validationData[featureNames])
-        self.validationlabels = self.dataframe_to_input(validationData[self.labelcolumn])
+        self.validationlabels = self.dataframe_to_input(validationData[[self.labelcolumn]])
         
-        print('Training Data Rows:',len(self.trainingfeatures[0]))
-        print('Validation Data Rows:',len(self.validationfeatures[0]))
+        print('Training examples:',len(self.trainingfeatures[0]))
+        print('Validation examples:',len(self.validationfeatures[0]))
 
         
 class DeepLearner:
@@ -348,9 +352,34 @@ class DeepLearner:
             denseOutput = Dense(len(self.learningdata.indexvalue[d.labelcolumn]), name='dense_output') (dense2D) # output values = cardinality of label column
 
         self.model = Model(inputs=list(inputLayers.values()), outputs=denseOutput)
-        self.model.compile(loss='mse', optimizer=Adamax())
+        self.model.compile(loss='mse', optimizer=Adam(), metrics=['acc'] )
         print(self.model.summary())
         
-    def train_model(self, fileName = ''):
+    def train_model(self, fileName='', epochs=1, superEpochs=1, learningRate=.001, learningRateDivisor=10):
         # use learning data set to train model
+        # super epoch is another round of n epochs with the learning rate divided by the divisor
         
+        # to-do if user passes filename, load the existing weights first if file exists
+
+        if fileName == '':
+            callbacks = [EarlyStopping('val_loss', patience=2)]
+        else:
+            callbacks = [EarlyStopping('val_loss', patience=2), \
+                     ModelCheckpoint(fileName + '_weights.h5', save_best_only=True)]
+
+        d = self.learningdata
+            
+        for i in range(1, superEpochs + 1):
+            
+            print('Super Epoch:', i)
+            print('Learning Rate:', learningRate)
+            
+            self.model.fit(d.trainingfeatures, d.traininglabels, \
+                           validation_data=(d.validationfeatures, d.validationlabels), \
+                           epochs=epochs, callbacks=callbacks)
+            
+            learningRate = learningRate / learningRateDivisor
+
+            
+            
+            
