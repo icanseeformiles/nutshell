@@ -7,6 +7,7 @@ from keras.models import Sequential, Model
 from keras.optimizers import Adam, Adamax
 from keras.callbacks import EarlyStopping, ModelCheckpoint
 from keras.preprocessing import sequence
+from keras import utils
 
 class LearningData:
     
@@ -132,7 +133,7 @@ class LearningData:
                 continue
             
             print(colname)
-            # to-do
+            self.prepdata[colname] = utils.normalize(self.inputdata[colname].values) ## wont work if there are any nan values
         
         # add label column to training set
         self.prepdata[self.labelcolumn] = self.inputdata[self.labelcolumn]
