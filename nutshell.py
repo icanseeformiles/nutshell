@@ -327,19 +327,22 @@ class DeepLearner:
             for i in range(0, self.hiddenlayers):
                 
                 denseLayers.append(Dense(self.outputfactors, activation='relu', name='dense_' + str(i)) \
-                                   (mergeNonSequentialLayer if i==0 else denseDropoutLayeres[i-1]))
+                                   (mergeNonSequentialLayer if i==0 else denseDropoutLayers[i-1]))
                 
                 denseDropoutLayers.append(Dropout(self.dropoutrate, name='dense_dropout_' + str(i)) \
                                          (denseLayers[i]))
             
-            
+            # conclude stack with reshape layer
+            denseReshapeLayer = Reshape((self.outputfactors,), name='dense_reshape') \
+                                       (denseDropoutLayers[self.hiddenlayers-1])
+                    
         # merge sequential and non-sequental path results
         if mergeSequentialLayer is not None and mergeNonSequentialLayer is not None:
-            mergeFinal = concatenate([lstmReshapeLayer, denseDropoutLayers[self.hiddenlayers-1]])    
+            mergeFinal = concatenate([lstmReshapeLayer, denseReshapeLayer])    
         elif mergeSequentialLayer is not None and mergeNonSequentialLayer is None:
             mergeFinal = lstmReshapeLayer
         elif mergeSequentialLayer is None and mergeNonSequentialLayer is not None:
-            mergeFinal = denseDropoutLayers[self.hiddenlayers-1]
+            mergeFinal = denseReshapeLayer
         else:
             raise NameError('No learning columns defined. Cannot continue.')
                             
@@ -381,6 +384,21 @@ class DeepLearner:
             
             learningRate = learningRate / learningRateDivisor
 
+    def extract_embedding(self, column_name, include_index_value = False):
+        # after model is trained, extract trained embedding vectors usefule for transfer learning
+        # list is returned in order of tokenized index (from self.learningdata.valueindex)
+        # if include_index_value = True then first column in list will be 
+        
+        embedding_list = self.model.get_layer('embed_' + column_name).get_weights()[0]
+        
+        if include_index_value:
+            value_list = []
+            for i in range(0, len(embedding_list)):
+                v = self.learningdata.indexvalue[column_name][i]
+                value_list.append([v, embedding_list[i]])
+            embedding_list = value_list
+        
+        return embedding_list
             
             
             
