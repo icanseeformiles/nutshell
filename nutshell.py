@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+from sklearn.preprocessing import Imputer
+
 from keras.layers import Dense, Embedding, Dropout, Reshape, Merge, Input, LSTM, concatenate
 from keras.layers import TimeDistributed
 from keras.models import Sequential, Model 
@@ -116,7 +118,7 @@ class LearningData:
         self.prepdata = pd.DataFrame()
         
         #convert category column values to index values
-        print("Converting category columns...")
+        if len(self.categorycolumns) > 0: print("Tokenizing category columns...")
         for colname in self.categorycolumns:
             print(colname)
             uniqueValues = self.unique_column_values(self.inputdata[colname], colname in self.sequencecolumns)            
@@ -125,15 +127,24 @@ class LearningData:
             # write new column to training data set
             self.prepdata[colname] = self.column_values_to_index(self.inputdata[colname], colname, colname in self.sequencecolumns)
         
-        # normalize numeric columns
-        print("Normalizing numeric columns...")
+        # prepare numeric columns
+        if len(self.numericcolumns) > 0: print("Imputing and normalizing numeric columns...")
+        
+        imputer = Imputer(missing_values='NaN', strategy='mean', axis=1)
+        
         for colname in self.numericcolumns:
             # don't normalize label column even if it is in the list
             if colname == self.labelcolumn:
                 continue
             
             print(colname)
-            self.prepdata[colname] = utils.normalize(self.inputdata[colname].values) ## wont work if there are any nan values
+            # impute - fill in missing numeric values with mean of existing values
+            imputer.fit([self.inputdata[colname].values])
+            imputed_column = list(imputer.transform([self.inputdata[colname].values])[0])
+            
+            # normalize - 
+            normalized_column = utils.normalize(imputed_column)[0] ## wont work if there are any nan values
+            self.prepdata[colname] = normalized_column
         
         # add label column to training set
         self.prepdata[self.labelcolumn] = self.inputdata[self.labelcolumn]
@@ -269,7 +280,7 @@ class DeepLearner:
                 sequentialLayers.append(inputLayers[c])
         
         if len(sequentialLayers) > 1:
-            mergeSequentialLayer = concatenate(sequentialLayers)
+            mergeSequentialLayer = concatenate(sequentialLayers, name='mergeSequential')
         elif len(sequentialLayers) == 1:
             mergeSequentialLayer = sequentialLayers[0]
         else:
@@ -282,13 +293,13 @@ class DeepLearner:
         nonSequentialLayers = []
         for c in self.categoryinputs:
             if c not in d.sequencecolumns:
-                nonSequentialLayers.append(factorLayers[c])
+                nonSequentialLayers.append(Reshape((self.categoryfactors[c],), name='reshape_'+c) (factorLayers[c])) # reshape non-seq embedding layer from 3D to 2D to match numeric shape
         for c in self.numericinputs:
             if c not in d.sequencecolumns:
                 nonSequentialLayers.append(inputLayers[c])
 
         if len(nonSequentialLayers) > 1:
-            mergeNonSequentialLayer = concatenate(nonSequentialLayers)
+            mergeNonSequentialLayer = concatenate(nonSequentialLayers, name='mergeNonSequential')
         elif len(nonSequentialLayers) == 1:
             mergeNonSequentialLayer = nonSequentialLayers[0]
         else:
