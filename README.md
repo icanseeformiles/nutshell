@@ -1,5 +1,5 @@
 # nutshell
-A tiny python library for deep learning
+A tiny python library for deep learning with Keras
 
 ## Summary
 
@@ -16,11 +16,11 @@ A Nutshell model may not always create the most optimal model possible, but will
 The library performs many of the data preparation and model construction tasks required during the life cycle of a deep learning project. This includes:
 
 - Tokenization of categorical data values
-- Normalization of numeric data values
+- Scaling of numeric data values
 - Generation of false/negative samples to build unsupervised semantic models
 - Conversion of pandas dataframes into format suitable for Keras model input
 - Splitting of data into training and validation sets
-- Selection of model type based on combination of different types of data values (e.g. sequential data, categorical data, etc.)
+- Selection of model elements based on combination of different types of data values (e.g. sequential data, categorical data, etc.)
 - Construction of model based on a small set of configuration values
 - Model training including early stopping, automatic learning rate adjustment, automatic model saving
 - Output of hidden layer / embedding vectors useful for transfer learning
