@@ -1,7 +1,12 @@
 import numpy as np
 import pandas as pd
+import pickle
+import csv
 
-from sklearn.preprocessing import Imputer
+from sklearn.preprocessing import Imputer, StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
 
 from keras.layers import Dense, Embedding, Dropout, Reshape, Merge, Input, LSTM, concatenate
 from keras.layers import TimeDistributed
@@ -9,84 +14,150 @@ from keras.models import Sequential, Model
 from keras.optimizers import Adam, Adamax
 from keras.callbacks import EarlyStopping, ModelCheckpoint
 from keras.preprocessing import sequence
+from keras.models import load_model
 from keras import utils
 
-class LearningData:
+class ModelDataSettings:
     
-    def __init__(self, inputdata = pd.DataFrame()):
-        self.inputdata = inputdata 
-        self.prepdata = pd.DataFrame()
-        self.trainingfeatures = []
-        self.traininglabels = []
-        self.validationfeatures = []
-        self.validationlabels = []
-        self.labelcolumn = ''
-        self.categorycolumns = [] #columns are either category or numeric but not both
-        self.numericcolumns = []
-        self.sequencecolumns = [] # sequence columns are also in category or numeric column list
-        self.sequencelength = 1 # max/pad length of sequences for training - all sequential cols have same length
-        self.valueindex = {} # dictionary of dictionaries - key is column name
-        self.indexvalue = {} # above only in reverse
-        self.validationsplit = .10
-        self.maxvalidation = 100000
+    def __init__(self):
+        self.label_column = ''
+        self.key_column = ''
+        self.category_columns = []
+        self.numeric_columns = []
+        self.sequence_columns = []
+        self.sequence_length = 10
+        self.value_index = {}
+        self.index_value = {}
+        self.imputers = {}
+        self.scalers = {}
     
-    def unique_column_values(self, dataSeries, isSequence=False):
+class ModelData:
+    
+    def __init__(self, input_data, settings_filename=''):
+        self.input_data = input_data 
+        self.prep_data = pd.DataFrame()
+        self.training_features = []
+        self.training_labels = []
+        self.validation_features = []
+        self.validation_labels = []
+        self.label_column = ''
+        self.key_column = '' # id column from input
+        self.category_columns = [] #columns are either category or numeric but not both
+        self.numeric_columns = []
+        self.sequence_columns = [] # sequence columns are also in category or numeric column list
+        self.sequence_length = 1 # max/pad length of sequences for training - all sequential cols have same length
+        self.value_index = {} # dictionary of dictionaries - key is column name
+        self.index_value = {} # above only in reverse
+        self.validation_split = .10
+        self.max_validation = 100000
+        self.imputers = {}
+        self.scalers = {}
+        
+        if settings_filename != '':
+            self.load_settings(settings_filename)
+    
+    def save_settings(self, filename):
+        # save modeldata settings to a file including column names and tokenization maps
+        # to do inference later, you will need to tokenize data for the model using 
+        #  the same token maps as were used during model training
+        # do not include file extension in filename - .pkl will be added
+        
+        settings = ModelDataSettings()
+
+        settings.label_column = self.label_column
+        settings.key_column = self.key_column
+        settings.category_columns = self.category_columns
+        settings.numeric_columns = self.numeric_columns
+        settings.sequence_columns = self.sequence_columns
+        settings.sequence_length = self.sequence_length
+        settings.value_index = self.value_index
+        settings.index_value = self.index_value
+        settings.imputers = self.imputers
+        settings.scalers = self.scalers
+        
+        with open(filename + '.pkl', 'wb') as output:
+            pickle.dump(settings, output, pickle.HIGHEST_PROTOCOL)
+            
+    def load_settings(self, filename):
+        # load settings from file
+        # do not include file extension in filename - .pkl will be added
+        
+        with open(filename + '.pkl', 'rb') as input:
+            settings = pickle.load(input)
+            
+        self.label_column = settings.label_column
+        self.key_column = settings.key_column
+        self.category_columns = settings.category_columns
+        self.numeric_columns = settings.numeric_columns
+        self.sequence_columns = settings.sequence_columns
+        self.sequence_length = settings.sequence_length
+        self.value_index = settings.value_index
+        self.index_value = settings.index_value
+        self.imputers = settings.imputers
+        self.scalers = settings.scalers
+
+    def write_csv(self, column_list, filename):
+        # write data from prep_data to csv file
+        
+        self.prep_data[column_list].to_csv(filename, index=False, quoting=csv.QUOTE_NONNUMERIC)
+        
+    def unique_column_values(self, data_series, is_sequence=False):
         # return a list of all unique values in series/column
         # if each value is actually a list of values, handle that
         
-        uniqueValues = []
+        unique_values = []
 
         # add two addition values for unknown and padding values
         # unknown will only be used during inference, not training
-        uniqueValues.append('<pad>') # should be 0 index
-        uniqueValues.append('<unk>') # should be 1 index
+        unique_values.append('<pad>') # should be 0 index
+        unique_values.append('<unk>') # should be 1 index
         
-        if isSequence:
+        if is_sequence:
             seq = []
-            for r in dataSeries.iteritems():
+            for r in data_series.iteritems():
                 for v in r[1]:
                     seq.append(v)
-            uniqueValues = uniqueValues + list(set(seq))
+            unique_values = unique_values + list(set(seq))
         else:
-            uniqueValues = uniqueValues + list(set(dataSeries))
+            unique_values = unique_values + list(set(data_series))
             
-        return uniqueValues
+        return unique_values
     
-    def column_values_to_index(self, dataSeries, columnName, isSequence=False):
+    def column_values_to_index(self, data_series, column_name, is_sequence=False):
         # take values in one column and changes them all to their zero-based index equivalent
         # if each value is actually a list of values, handle that
         # return a list of converted values
         
-        indexList = []
-        if isSequence: # create a list of lists
-            for l in dataSeries:
+        index_list = []
+        if is_sequence: # create a list of lists
+            for l in data_series:
                 seq = []
                 for v in l:
-                    seq.append(self.valueindex[columnName][v])
-                indexList.append(seq)
+                    seq.append(self.value_index[column_name][v])
+                index_list.append(seq)
         else:
-            for v in dataSeries:
-                indexList.append(self.valueindex[columnName][v])
+            for v in data_series:
+                index_list.append(self.value_index[column_name][v])
                 
-        return indexList
+        return index_list
     
-    def add_false_rows(self, defaceColumns):
+    def add_false_rows(self, deface_columns):
         # add negative samples to training data by defacing specific columns with false values
         # label the new rows false (0)
         
-        #self.prepdata[self.labelcolumn] = 1 # label all true examples - dont assume this
+        #self.prep_data[self.label_column] = 1 # label all true examples - dont assume this
         
-        dfFalse = self.prepdata.copy(deep=True) # copy all true examples as a starting point (dont use pandas copy)
-        dfFalse[self.labelcolumn] = 0 # label all false examples
+        dfFalse = self.prep_data.copy(deep=True) # copy all true examples as a starting point (dont use pandas copy)
+        dfFalse[self.label_column] = 0 # label all false examples
         
-        for colName in defaceColumns:
-            dfFalse[colName] = self.deface_column(dfFalse[colName], colName in self.sequencecolumns, .15)
+        for col_name in deface_columns:
+            dfFalse[col_name] = self.deface_column(dfFalse[col_name], col_name in self.sequence_columns, .15)
                 
         # add false rows to training data
-        self.prepdata = pd.concat([self.prepdata, dfFalse], ignore_index=True)
+        self.prep_data = pd.concat([self.prep_data, dfFalse], ignore_index=True)
         
     
-    def deface_column(self, dataSeries, isSequence=False, modifySequence=.10):
+    def deface_column(self, data_series, is_sequence=False, modifySequence=.10):
         # to create negative/false samples with value distribution similar to input set
         # for sequences, change a random x% of values in the sequence - where x = modifySequence
 
@@ -94,13 +165,13 @@ class LearningData:
         
         # shuffle true value column to select random specimin values
         # using real values from a random row will maintain proper distribution of values
-        indices = np.arange(0,len(dataSeries))
+        indices = np.arange(0,len(data_series))
         np.random.shuffle(indices)
                 
         for i in range(0,len(indices)):
-            s = dataSeries[indices[i]] # random specimin from within true data set
-            r = dataSeries[i].copy() # must make a copy, otherwise we are updating the original list object reference
-            if isSequence:
+            s = data_series[indices[i]] # random specimin from within true data set
+            r = data_series[i].copy() # must make a copy, otherwise we are updating the original list object reference
+            if is_sequence:
                 # calc number of sequence values to modify (at least 1)
                 for m in range(0, max(int(len(r) * modifySequence), 1)):
                     rpos = np.random.randint(0,len(r)) # choose a random position in seq to modify
@@ -112,55 +183,105 @@ class LearningData:
         
         return false_list      
     
-    def prepare_data(self):
+    def prepare_data(self, reset_metadata=False):
+        # reset_metadata=True will rebuild category column token map and numeric column normalizers
+        #  only use this during model training
 
         #initialize prepared data frame - this is the set that will be split into train and validation parts
-        self.prepdata = pd.DataFrame()
-        
+        self.prep_data = pd.DataFrame()
+                
         #convert category column values to index values
-        if len(self.categorycolumns) > 0: print("Tokenizing category columns...")
-        for colname in self.categorycolumns:
-            print(colname)
-            uniqueValues = self.unique_column_values(self.inputdata[colname], colname in self.sequencecolumns)            
-            self.valueindex[colname] = dict((c,i) for i, c in enumerate(uniqueValues))
-            self.indexvalue[colname] = dict((i,c) for i, c in enumerate(uniqueValues))
+        if len(self.category_columns) > 0: 
+            print("Tokenizing category columns...")
+            
+        # build category map if it is empty or if user wishes to rebuild it
+        reset_metadata = len(self.index_value) == 0 or reset_metadata
+        
+        if len(self.index_value) > 0 and not reset_metadata: 
+            print("** Using pre-defined token map **")
+        
+        for col_name in self.category_columns:
+
+            # if column name is not in input_data then skip it (e.g. when label col is not in inference data)
+            if col_name not in self.input_data.columns:
+                continue
+
+            if reset_metadata:
+                unique_values = self.unique_column_values(self.input_data[col_name], col_name in self.sequence_columns)           
+                self.value_index[col_name] = dict((c,i) for i, c in enumerate(unique_values))
+                self.index_value[col_name] = dict((i,c) for i, c in enumerate(unique_values))
+            else:
+                unique_values = self.index_value[col_name].values()
+            
             # write new column to training data set
-            self.prepdata[colname] = self.column_values_to_index(self.inputdata[colname], colname, colname in self.sequencecolumns)
+            self.prep_data[col_name] = self.column_values_to_index(
+                                        self.input_data[col_name], col_name, col_name in self.sequence_columns)
+            
+            print(col_name, len(unique_values) - 2)
         
         # prepare numeric columns
-        if len(self.numericcolumns) > 0: print("Imputing and normalizing numeric columns...")
-        
-        imputer = Imputer(missing_values='NaN', strategy='mean', axis=1)
-        
-        for colname in self.numericcolumns:
+        if len(self.numeric_columns) > 0:
+            print("Imputing and scaling numeric columns...")
+            if not reset_metadata:
+                print("** Using pre-defined impute/scale metadata **")
+                
+        for col_name in self.numeric_columns:
             # don't normalize label column even if it is in the list
-            if colname == self.labelcolumn:
+            if col_name == self.label_column:
                 continue
+                
+            # if column name not in input_data then skip it
+            if col_name not in self.input_data.columns:
+                continue
+                      
+            print(col_name)
             
-            print(colname)
-            # impute - fill in missing numeric values with mean of existing values
-            imputer.fit([self.inputdata[colname].values])
-            imputed_column = list(imputer.transform([self.inputdata[colname].values])[0])
+            # impute - fill in missing numeric values (nan) with mean of existing values
+            #  scaler won't work if there are any NaN values in data
             
-            # normalize - 
-            normalized_column = utils.normalize(imputed_column)[0] ## wont work if there are any nan values
-            self.prepdata[colname] = normalized_column
+            if reset_metadata:
+                imputer = Imputer(missing_values='NaN', strategy='mean', axis=1)
+                imputer.fit([self.input_data[col_name].values])
+                self.imputers[col_name] = imputer
+            else:
+                imputer = self.imputers[col_name]
+                
+            #imputed_column = list(imputer.transform([self.input_data[col_name].values])[0])
+            imputed_column = imputer.transform([self.input_data[col_name].values])
+           
+            # scale numeric values 
+            
+            if reset_metadata:
+                scaler = StandardScaler()
+                #normalized_column = utils.normalize(imputed_column)[0] ## wont work if there are any nan values
+                scaler.fit(imputed_column[0][:, np.newaxis])
+                self.scalers[col_name] = scaler
+            else:
+                scaler = self.scalers[col_name]
+                
+            normalized_column = scaler.transform(imputed_column[0][:, np.newaxis])
+            self.prep_data[col_name] = normalized_column
         
-        # add label column to training set
-        self.prepdata[self.labelcolumn] = self.inputdata[self.labelcolumn]
+        # add label column (as is) to prepared data
+        if self.label_column in self.input_data.columns:
+            self.prep_data[self.label_column] = self.input_data[self.label_column]
+        
+        #same with key column
+        if self.key_column in self.input_data.columns:
+            self.prep_data[self.key_column] = self.input_data[self.key_column]
         
         print('Done preparing data')
         
     def dataframe_to_input(self, dataframe):
         # convert each dataframe column to a seperate numpy array in a list suitable for keras input tensor
         # for sequence columns, truncate/pad each value to uniform length 
-        # pad value is 0 because we defined that in our valueindex dictionary (0 = padding; 1 = unknown)
-        # dont forget to set sequencelength before calling this!
+        # pad value is 0 because we defined that in our value_index dictionary (0 = padding; 1 = unknown)
+        # dont forget to set sequence_length before calling this!
         
         input_list = []
         for col in dataframe:
-            if col in self.sequencecolumns:
-                padseq = sequence.pad_sequences(dataframe[col].values, maxlen=self.sequencelength, \
+            if col in self.sequence_columns:
+                padseq = sequence.pad_sequences(dataframe[col].values, maxlen=self.sequence_length, \
                                   padding='post', truncating='post', value=0)
                 input_list.append(padseq)
 
@@ -168,248 +289,334 @@ class LearningData:
                 input_list.append(dataframe[col].values)
             
         return input_list 
-
     
+    def feature_names(self):
+        # build list of columns in same order as model inputs will be added
+        # features are those columns that are not the label column
+        
+        feature_names = []
+        for c in self.category_columns:
+            if c != self.label_column:
+                feature_names.append(c)
+        for c in self.numeric_columns:
+            if c != self.label_column:
+                feature_names.append(c)
+        
+        return feature_names
+        
     def split_data(self, shuffle=False):
         
-        # split prepdata into training and validation set
+        # split prep_data into training and validation set
         # it's best to shuffle the order of the data rows so validation set is random sample
         #  unless there is some reason not to e.g. train on jan-may, validate on june
         
-        # build list of columns in same order as model inputs will be added
-        featureNames = []
-        trainingData = None
-        validationData = None
-        for c in self.categorycolumns:
-            if c != self.labelcolumn:
-                featureNames.append(c)
-        for c in self.numericcolumns:
-            if c != self.labelcolumn:
-                featureNames.append(c)
+        feature_names = self.feature_names() # features are those columns that are not the label column
+
+        training_data = None
+        validation_data = None
               
-        validationRows = min(int(self.validationsplit * len(self.prepdata)), self.maxvalidation)
+        validation_rows = min(int(self.validation_split * len(self.prep_data)), self.max_validation)
 
         if shuffle:
-            indices = np.array(self.prepdata.index.values.copy())
+            indices = np.array(self.prep_data.index.values.copy())
             np.random.shuffle(indices)
-            trainIndices = indices[0:-validationRows]
-            valIndices = indices[-validationRows:]
-            trainingData = self.prepdata.iloc[trainIndices]
-            validationData = self.prepdata.iloc[valIndices]
+            train_indices = indices[0:-validation_rows]
+            val_indices = indices[-validation_rows:]
+            training_data = self.prep_data.iloc[train_indices]
+            validation_data = self.prep_data.iloc[val_indices]
         else:
-            trainingData = self.prepdata[:-validationRows]
-            validationData = self.prepdata[-validationRows:]
+            training_data = self.prep_data[:-validation_rows]
+            validation_data = self.prep_data[-validation_rows:]
             
         # convert dataframe values to keras input
-        self.trainingfeatures = self.dataframe_to_input(trainingData[featureNames])
-        self.traininglabels = self.dataframe_to_input(trainingData[[self.labelcolumn]])
-        self.validationfeatures = self.dataframe_to_input(validationData[featureNames])
-        self.validationlabels = self.dataframe_to_input(validationData[[self.labelcolumn]])
+        self.training_features = self.dataframe_to_input(training_data[feature_names])
+        self.training_labels = self.dataframe_to_input(training_data[[self.label_column]])
+        self.validation_features = self.dataframe_to_input(validation_data[feature_names])
+        self.validation_labels = self.dataframe_to_input(validation_data[[self.label_column]])
         
-        print('Training examples:',len(self.trainingfeatures[0]))
-        print('Validation examples:',len(self.validationfeatures[0]))
+        print('Training examples:',len(self.training_features[0]))
+        print('Validation examples:',len(self.validation_features[0]))
 
         
-class DeepLearner:
+class Learner:
     
-    def __init__(self, learningdata):       
-        self.learningdata = learningdata
-        self.hiddenlayers = 2 # number of hidden dense/lstm layer sets to add not including rep/2d layers - min=1
-        self.labeltype = 'binary' # or category
+    def __init__(self, modeldata):       
+        self.modeldata = modeldata
+        self.hidden_layers = 2 # number of hidden dense/lstm layer sets to add not including rep/2d layers - min=1
+        self.label_type = 'binary' # or category
         self.model = None
-        self.categoryinputs = []
-        self.categoryfactors = {} # embedding factors - each value corresponds to categoryinputs value 
-        self.numericinputs = []
-        self.outputfactors = 50 # number of factors in the representational output vector
-        self.batchsize = 32 # number of rows to process in a batch during training or inference. high number = faster + more GPU memory usage
-        self.lstmunits = 24 # number of LSTM memory cells
-        self.dropoutrate = .20 # default dropout percentage for hidden layers
-        self.GPU = False # whether or not GPU batching is being used - LSTM setting
-        #self.sequentialinput = len(self.learningdata.sequencecolumns) > 0
+        self.category_inputs = []
+        self.category_factors = {} # of embedding factors for each category - each value corresponds to category_inputs value 
+        self.numeric_inputs = []
+        self.output_factors = 50 # number of factors in the representational output vector
+        self.batch_size = 32 # number of rows to process in a batch during training or inference. high number = faster + more gpu memory usage
+        self.lstm_units = 24 # number of LSTM memory cells
+        self.dropout_rate = .20 # default dropout percentage for hidden layers
+        self.gpu = False # whether or not gpu batching is being used - for LSTM implementation setting
 
         # populate category and numeric input names from learning data - not including label column
-        d = self.learningdata
-        for c in d.categorycolumns:
-            if c != d.labelcolumn:
-                self.categoryinputs.append(c)
+        d = self.modeldata
+        for c in d.category_columns:
+            if c != d.label_column:
+                self.category_inputs.append(c)
                 # determine default number of embedding factors for each category 
                 # default is the smaller of cardinality / 2 or 50 - but at least 1
-                cardinality = len(self.learningdata.indexvalue[c])
-                self.categoryfactors[c] = max(min(int(cardinality/2), 50),1)
-        for c in d.numericcolumns:
-            if c!= d.labelcolumn:
-                self.numericinputs.append(c)
+                cardinality = len(d.index_value[c])
+                self.category_factors[c] = max(min(int(cardinality/2), 50),1)
+        for c in d.numeric_columns:
+            if c!= d.label_column:
+                self.numeric_inputs.append(c)
                 
     def build_model(self):
 
         # paths vary for category vs numeric data as well as for sequential vs non-squential data
         # so building layer flow is a bit tricky
         
-        d = self.learningdata
-        inputColumns = self.categoryinputs + self.numericinputs
+        d = self.modeldata
+        input_columns = self.category_inputs + self.numeric_inputs
         
-        inputLayers = {}
-        embeddingLayers = {}
-        factorLayers = {}
-        #factorLayersReshape = {}
+        input_layers = {}
+        embedding_layers = {}
+        factor_layers = {}
         
         # add input layers
-        for c in inputColumns:
-            inputLayers[c] = Input(shape=(d.sequencelength if c in d.sequencecolumns else 1,), name='input_' + c)
+        for c in input_columns:
+            input_layers[c] = Input(shape=(d.sequence_length if c in d.sequence_columns else 1,), name='input_' + c)
         
         # add embedding layers for all categorical inputs
-        for c in self.categoryinputs:
-            embeddingLayers[c] = Embedding(input_dim = len(d.indexvalue[c]), \
-                                                output_dim = self.categoryfactors[c], \
-                                                input_length = d.sequencelength, \
+        for c in self.category_inputs:
+            embedding_layers[c] = Embedding(input_dim = len(d.index_value[c]), \
+                                                output_dim = self.category_factors[c], \
+                                                input_length = d.sequence_length, \
                                                 name='embed_' + c)
     
         # add factor layers - joining category input layer to category embedding layer + Reshape
-        for c in self.categoryinputs:
-            #factorLayers[c] = Reshape((d.sequencelength, self.categoryfactors[c],)) (embeddingLayers[c](inputLayers[c]))
-            factorLayers[c] = embeddingLayers[c](inputLayers[c])
+        for c in self.category_inputs:
+            #factor_layers[c] = Reshape((d.sequence_length, self.category_factors[c],)) (embedding_layers[c](input_layers[c]))
+            factor_layers[c] = embedding_layers[c](input_layers[c])
            
         # merge inputs into two seperate merge layers that will go down seperate paths (sequential & non-sequential)
                             
         # merge sequential inputs (factor layers for categorical and input layers for numeric)
-        sequentialLayers = []
-        for c in d.sequencecolumns:
-            if c in self.categoryinputs:
-                sequentialLayers.append(factorLayers[c])
-            if c in self.numericinputs:
-                sequentialLayers.append(inputLayers[c])
+        sequential_layers = []
+        for c in d.sequence_columns:
+            if c in self.category_inputs:
+                sequential_layers.append(factor_layers[c])
+            if c in self.numeric_inputs:
+                sequential_layers.append(input_layers[c])
         
-        if len(sequentialLayers) > 1:
-            mergeSequentialLayer = concatenate(sequentialLayers, name='mergeSequential')
-        elif len(sequentialLayers) == 1:
-            mergeSequentialLayer = sequentialLayers[0]
+        if len(sequential_layers) > 1:
+            merge_sequential_layer = concatenate(sequential_layers, name='merge_sequential')
+        elif len(sequential_layers) == 1:
+            merge_sequential_layer = sequential_layers[0]
         else:
-            mergeSequentialLayer = None
+            merge_sequential_layer = None
 
-        if mergeSequentialLayer is not None:
-            print('Sequential Merge Layer Shape: ', mergeSequentialLayer.shape)
+        if merge_sequential_layer is not None:
+            print('Sequential Merge Layer Shape: ', merge_sequential_layer.shape)
             
         # merge non-sequential inputs
-        nonSequentialLayers = []
-        for c in self.categoryinputs:
-            if c not in d.sequencecolumns:
-                nonSequentialLayers.append(Reshape((self.categoryfactors[c],), name='reshape_'+c) (factorLayers[c])) # reshape non-seq embedding layer from 3D to 2D to match numeric shape
-        for c in self.numericinputs:
-            if c not in d.sequencecolumns:
-                nonSequentialLayers.append(inputLayers[c])
+        nonsequential_layers = []
+        for c in self.category_inputs:
+            if c not in d.sequence_columns:
+                nonsequential_layers.append(Reshape((self.category_factors[c],), name='reshape_'+c) (factor_layers[c])) # reshape non-seq embedding layer from 3D to 2D to match numeric shape
+        for c in self.numeric_inputs:
+            if c not in d.sequence_columns:
+                nonsequential_layers.append(input_layers[c])
 
-        if len(nonSequentialLayers) > 1:
-            mergeNonSequentialLayer = concatenate(nonSequentialLayers, name='mergeNonSequential')
-        elif len(nonSequentialLayers) == 1:
-            mergeNonSequentialLayer = nonSequentialLayers[0]
+        if len(nonsequential_layers) > 1:
+            merge_non_sequential_layer = concatenate(nonsequential_layers, name='merge_non_sequential')
+        elif len(nonsequential_layers) == 1:
+            merge_non_sequential_layer = nonsequential_layers[0]
         else:
-            mergeNonSequentialLayer = None
+            merge_non_sequential_layer = None
         
-        if mergeNonSequentialLayer is not None:
-            print('Non-Sequential Merge Layer Shape:', mergeNonSequentialLayer.shape)
+        if merge_non_sequential_layer is not None:
+            print('Non-Sequential Merge Layer Shape:', merge_non_sequential_layer.shape)
 
         # build LSTM layer set for sequential data
-        if mergeSequentialLayer is not None:
+        if merge_sequential_layer is not None:
             
-            lstmLayers = [] 
-            lstmDropoutLayers = []
+            lstm_layers = [] 
+            lstm_dropout_layers = []
             
             # add n sets of LSTM and Dropout layers
-            impl = 2 if self.GPU else 1 
-            for i in range(0, self.hiddenlayers):
+            impl = 2 if self.gpu else 1 
+            for i in range(0, self.hidden_layers):
                     
-                lstmLayers.append(LSTM(self.lstmunits, return_sequences=True, \
-                                     dropout=self.dropoutrate, recurrent_dropout=self.dropoutrate, \
+                lstm_layers.append(LSTM(self.lstm_units, return_sequences=True, \
+                                     dropout=self.dropout_rate, recurrent_dropout=self.dropout_rate, \
                                      implementation=impl, activation='relu', \
-                                     name='lstm_' + str(i))(mergeSequentialLayer if i==0 else lstmDropoutLayers[i-1]))
+                                     name='lstm_' + str(i))(merge_sequential_layer if i==0 else lstm_dropout_layers[i-1]))
                 
-                lstmDropoutLayers.append(Dropout(self.dropoutrate, name='lstm_dropout_' + str(i))(lstmLayers[i]))
+                lstm_dropout_layers.append(Dropout(self.dropout_rate, name='lstm_dropout_' + str(i))(lstm_layers[i]))
             
-            lstmTimeDistLayer = TimeDistributed(Dense(self.lstmunits, name='lstm_dense'), name='lstm_timedist')(lstmDropoutLayers[self.hiddenlayers-1])
-            lstmReshapeLayer = Reshape((d.sequencelength * self.lstmunits,), name='lstm_reshape')(lstmTimeDistLayer)
+            lstm_timedist_layer = TimeDistributed(Dense(self.lstm_units, name='lstm_dense'), name='lstm_timedist')(lstm_dropout_layers[self.hidden_layers-1])
+            lstm_reshape_layer = Reshape((d.sequence_length * self.lstm_units,), name='lstm_reshape')(lstm_timedist_layer)
 
         # build Dense layer set for non-sequential layers
-        if mergeNonSequentialLayer is not None:
+        if merge_non_sequential_layer is not None:
             
-            denseLayers = []
-            denseDropoutLayers = []
+            dense_layers = []
+            dense_dropout_layers = []
             
             # add n sets of Dense and Dropout layers
-            for i in range(0, self.hiddenlayers):
+            for i in range(0, self.hidden_layers):
                 
-                denseLayers.append(Dense(self.outputfactors, activation='relu', name='dense_' + str(i)) \
-                                   (mergeNonSequentialLayer if i==0 else denseDropoutLayers[i-1]))
+                dense_layers.append(Dense(self.output_factors, activation='relu', name='dense_' + str(i)) \
+                                   (merge_non_sequential_layer if i==0 else dense_dropout_layers[i-1]))
                 
-                denseDropoutLayers.append(Dropout(self.dropoutrate, name='dense_dropout_' + str(i)) \
-                                         (denseLayers[i]))
+                dense_dropout_layers.append(Dropout(self.dropout_rate, name='dense_dropout_' + str(i)) \
+                                         (dense_layers[i]))
             
             # conclude stack with reshape layer
-            denseReshapeLayer = Reshape((self.outputfactors,), name='dense_reshape') \
-                                       (denseDropoutLayers[self.hiddenlayers-1])
+            dense_reshape_layer = Reshape((self.output_factors,), name='dense_reshape') \
+                                       (dense_dropout_layers[self.hidden_layers-1])
                     
         # merge sequential and non-sequental path results
-        if mergeSequentialLayer is not None and mergeNonSequentialLayer is not None:
-            mergeFinal = concatenate([lstmReshapeLayer, denseReshapeLayer])    
-        elif mergeSequentialLayer is not None and mergeNonSequentialLayer is None:
-            mergeFinal = lstmReshapeLayer
-        elif mergeSequentialLayer is None and mergeNonSequentialLayer is not None:
-            mergeFinal = denseReshapeLayer
+        if merge_sequential_layer is not None and merge_non_sequential_layer is not None:
+            mergeFinal = concatenate([lstm_reshape_layer, dense_reshape_layer])    
+        elif merge_sequential_layer is not None and merge_non_sequential_layer is None:
+            mergeFinal = lstm_reshape_layer
+        elif merge_sequential_layer is None and merge_non_sequential_layer is not None:
+            mergeFinal = dense_reshape_layer
         else:
             raise NameError('No learning columns defined. Cannot continue.')
                             
-        denseRepresentation = Dense(self.outputfactors, name='dense_representation') (mergeFinal)
-        dense2D = Dense(2, name='dense_2d') (denseRepresentation)
+        dense_representation = Dense(self.output_factors, name='dense_representation') (mergeFinal)
+        #dense2D = Dense(2, name='dense_2d') (dense_representation)
         
         # output layer size depends on whether label is binary or category
-        if self.labeltype == 'binary':
-            denseOutput = Dense(1, name='dense_output') (dense2D)
+        if self.label_type == 'binary':
+            dense_output = Dense(1, name='dense_output') (dense_representation)
         else:
-            denseOutput = Dense(len(self.learningdata.indexvalue[d.labelcolumn]), name='dense_output') (dense2D) # output values = cardinality of label column
+            dense_output = Dense(len(self.modeldata.index_value[d.label_column]), name='dense_output') (dense_representation) # output values = cardinality of label column
 
-        self.model = Model(inputs=list(inputLayers.values()), outputs=denseOutput)
+        self.model = Model(inputs=list(input_layers.values()), outputs=dense_output)
         self.model.compile(loss='mse', optimizer=Adam(), metrics=['acc'] )
         print(self.model.summary())
         
-    def train_model(self, fileName='', epochs=1, superEpochs=1, learningRate=.001, learningRateDivisor=10):
+    def train_model(self, filename='', epochs=1, super_epochs=1, learning_rate=.001, learning_rate_divisor=10):
         # use learning data set to train model
         # super epoch is another round of n epochs with the learning rate divided by the divisor
+        # do not include file extension in filename
+        
+        # save modeldata settings (including tokenization maps) to a file to be used later during inference
+        self.modeldata.save_settings(filename + '_settings')
         
         # to-do if user passes filename, load the existing weights first if file exists
 
-        if fileName == '':
+        if filename == '':
             callbacks = [EarlyStopping('val_loss', patience=2)]
         else:
             callbacks = [EarlyStopping('val_loss', patience=2), \
-                     ModelCheckpoint(fileName + '_weights.h5', save_best_only=True)]
+                     ModelCheckpoint(filename + '_weights.h5', save_best_only=True)]
 
-        d = self.learningdata
+        d = self.modeldata
             
-        for i in range(1, superEpochs + 1):
+        for i in range(1, super_epochs + 1):
             
             print('Super Epoch:', i)
-            print('Learning Rate:', learningRate)
+            print('Learning Rate:', learning_rate)
             
-            self.model.fit(d.trainingfeatures, d.traininglabels, \
-                           validation_data=(d.validationfeatures, d.validationlabels), \
+            self.model.fit(d.training_features, d.training_labels, \
+                           validation_data=(d.validation_features, d.validation_labels), \
                            epochs=epochs, callbacks=callbacks)
             
-            learningRate = learningRate / learningRateDivisor
+            learning_rate = learning_rate / learning_rate_divisor
+            
+        # save model
+        if filename != '':
+            self.model.save(filename + '_model.h5')
+            
+        # to do: delete weights file if it exists? 
+        
 
-    def extract_embedding(self, column_name, include_index_value = False):
+    def extract_embedding(self, column_name, include_key = False):
         # after model is trained, extract trained embedding vectors usefule for transfer learning
-        # list is returned in order of tokenized index (from self.learningdata.valueindex)
+        # list is returned in order of tokenized index (from self.ModelData.value_index)
         # if include_index_value = True then first column in list will be 
         
         embedding_list = self.model.get_layer('embed_' + column_name).get_weights()[0]
         
-        if include_index_value:
-            value_list = []
+        if include_key:
+            key_list = []
             for i in range(0, len(embedding_list)):
-                v = self.learningdata.indexvalue[column_name][i]
-                value_list.append([v, embedding_list[i]])
-            embedding_list = value_list
+                v = self.modeldata.index_value[column_name][i]
+                key_list.append(v)
+            embedding_list = [embedding_list, key_list]
+            return embedding_list
+        else:
+            return [embedding_list]
+                
+class Predictor:
+    
+    def __init__(self, model_filename, modeldata):
+        # do not include file extension
+                
+        self.model = load_model(model_filename + '.h5')
+        self.modeldata = modeldata
+        self.score_column = 'score' # (new) column in modeldata.prep_data where predictions will be placed
+        self.labeltype = 'binary' # maybe we can know this from the model output shape
+        self.features = None
+        self.gpu = False
+        self.batch_size = 32
         
-        return embedding_list
-            
-            
+        d = self.modeldata
+        self.features = d.dataframe_to_input(d.prep_data[d.feature_names()]) # convert prep data to keras input format
+
+    def score(self):
+        #make predictions and place them in the score_column
+        
+        self.modeldata.prep_data[self.score_column] = self.model.predict(self.features, verbose=1)
+        print('')
+        print('Done scoring')
+               
+class Representation:
+    
+    def __init__(self, embeddings=[]):
+        
+        # list 0 in parm is embedding vector list
+        # list 1 in parm, if present, is list of keys (learningdata.indexvalue)
+        
+        self.vectors = []
+        self.keys = []
+        self.clusters = []
+        self.cluster_count = 0
+        
+        self.vectors = embeddings[0]
+        
+        if len(embeddings) > 1 :            
+            self.keys = embeddings[1]
+
+    def calculate_clusters(self, cluster_count):
+        
+        self.cluster_count = cluster_count
+        
+        kmeans = KMeans(n_clusters=self.cluster_count, random_state=0).fit(self.vectors)
+        self.clusters = kmeans.labels_
+        
+    def reduce_dimensions(self, dimension_count=2):
+        
+        tsne = TSNE(n_components=dimension_count, random_state=0)
+        new_vectors = tsne.fit_transform(self.vectors)
+        
+        return new_vectors
+    
+    def plot_2d(self, max_points=1000, label_keys=True):
+        
+        vectors2d = self.reduce_dimensions(2)
+        
+        plt.scatter(vectors2d[:max_points,0], vectors2d[:max_points,1], color='b')
+        
+        #for i in range(0,len(vectors2d)):
+        #    plt.text(self.keys[i], vectors2d[i:i+1,0], vectors2d[i:i+1,1] )
+        #plt.text(self.keys, vectors2d[:max_points,0], vectors2d[:max_points,1])
+        
+        plt.xlabel('Reduced Dimension A')
+        plt.ylabel('Reduced Dimension B')
+        plt.show()
+        
+    
+    
             
