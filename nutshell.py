@@ -133,11 +133,17 @@ class ModelData:
             for l in data_series:
                 seq = []
                 for v in l:
-                    seq.append(self.value_index[column_name][v])
+                    if v in self.value_index[column_name]:
+                        seq.append(self.value_index[column_name][v])
+                    else:
+                        seq.append(1) # unknown value
                 index_list.append(seq)
         else:
             for v in data_series:
-                index_list.append(self.value_index[column_name][v])
+                if v in self.value_index[column_name]:
+                    index_list.append(self.value_index[column_name][v])
+                else:
+                    index_list.append(1)
                 
         return index_list
     
@@ -208,8 +214,9 @@ class ModelData:
 
             if reset_metadata:
                 unique_values = self.unique_column_values(self.input_data[col_name], col_name in self.sequence_columns)           
-                self.value_index[col_name] = dict((c,i) for i, c in enumerate(unique_values))
-                self.index_value[col_name] = dict((i,c) for i, c in enumerate(unique_values))
+                #self.value_index[col_name] = dict((c,i) for i, c in enumerate(unique_values))
+                #self.index_value[col_name] = dict((i,c) for i, c in enumerate(unique_values))
+                self.set_category_values(col_name, unique_values)
             else:
                 unique_values = self.index_value[col_name].values()
             
@@ -271,6 +278,20 @@ class ModelData:
             self.prep_data[self.key_column] = self.input_data[self.key_column]
         
         print('Done preparing data')
+
+    def set_category_values(self, column_name, unique_values):
+        # override automatic categories for a single column
+        
+        # stick padding and unknown values onto the front of the unique values list
+        passed_values = unique_values.copy()
+        unique_values = []
+        unique_values.append('<pad>') # should be 0 index
+        unique_values.append('<unk>') # should be 1 index
+        for v in passed_values:
+            unique_values.append(v)
+        
+        self.value_index[column_name] = dict((c,i) for i, c in enumerate(unique_values))
+        self.index_value[column_name] = dict((i,c) for i, c in enumerate(unique_values))
         
     def dataframe_to_input(self, dataframe):
         # convert each dataframe column to a seperate numpy array in a list suitable for keras input tensor
@@ -304,7 +325,7 @@ class ModelData:
         
         return feature_names
         
-    def split_data(self, shuffle=False):
+    def split_data(self, shuffle=True):
         
         # split prep_data into training and validation set
         # it's best to shuffle the order of the data rows so validation set is random sample
@@ -495,6 +516,14 @@ class Learner:
         self.model = Model(inputs=list(input_layers.values()), outputs=dense_output)
         self.model.compile(loss='mse', optimizer=Adam(), metrics=['acc'] )
         print(self.model.summary())
+
+    def set_embedding(self, column_name, vectors):
+        # load pre-trained embeddings
+        #  vectors should be in index order and match configured factor size
+        
+        embed_layer = self.model.get_layer('embed_' + column_name)
+        embed_layer.set_weights(vectors)
+        embed_layer.trainable=False
         
     def train_model(self, filename='', epochs=1, super_epochs=1, learning_rate=.001, learning_rate_divisor=10):
         # use learning data set to train model
@@ -521,6 +550,7 @@ class Learner:
             
             self.model.fit(d.training_features, d.training_labels, \
                            validation_data=(d.validation_features, d.validation_labels), \
+                           batch_size=self.batch_size, \
                            epochs=epochs, callbacks=callbacks)
             
             learning_rate = learning_rate / learning_rate_divisor
