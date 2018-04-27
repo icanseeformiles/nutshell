@@ -147,25 +147,23 @@ class ModelData:
                 
         return index_list
     
-    def add_false_rows(self, deface_columns):
+    def add_false_rows(self, deface_columns, percent_of_sequence=.10):
         # add negative samples to training data by defacing specific columns with false values
         # label the new rows false (0)
-        
-        #self.prep_data[self.label_column] = 1 # label all true examples - dont assume this
         
         dfFalse = self.prep_data.copy(deep=True) # copy all true examples as a starting point (dont use pandas copy)
         dfFalse[self.label_column] = 0 # label all false examples
         
         for col_name in deface_columns:
-            dfFalse[col_name] = self.deface_column(dfFalse[col_name], col_name in self.sequence_columns, .15)
+            dfFalse[col_name] = self.deface_column(dfFalse[col_name], col_name in self.sequence_columns, percent_of_sequence)
                 
         # add false rows to training data
         self.prep_data = pd.concat([self.prep_data, dfFalse], ignore_index=True)
         
     
-    def deface_column(self, data_series, is_sequence=False, modifySequence=.10):
+    def deface_column(self, data_series, is_sequence=False, percent_of_sequence=.10):
         # to create negative/false samples with value distribution similar to input set
-        # for sequences, change a random x% of values in the sequence - where x = modifySequence
+        # for sequences, change a random x% of values in the sequence - where x = percent_of_sequence
 
         false_list = []
         
@@ -179,7 +177,7 @@ class ModelData:
             r = data_series[i].copy() # must make a copy, otherwise we are updating the original list object reference
             if is_sequence:
                 # calc number of sequence values to modify (at least 1)
-                for m in range(0, max(int(len(r) * modifySequence), 1)):
+                for m in range(0, max(int(len(r) * percent_of_sequence), 1)):
                     rpos = np.random.randint(0,len(r)) # choose a random position in seq to modify
                     spos = np.random.randint(0,len(s)) # choose random position in specimin to use for mod
                     r[rpos] = s[spos]
@@ -522,8 +520,10 @@ class Learner:
         #  vectors should be in index order and match configured factor size
         
         embed_layer = self.model.get_layer('embed_' + column_name)
-        embed_layer.set_weights(vectors)
+        embed_layer.set_weights(np.array([vectors]))
         embed_layer.trainable=False
+        
+        self.model.compile(loss='mse', optimizer=Adam(), metrics=['acc'] )
         
     def train_model(self, filename='', epochs=1, super_epochs=1, learning_rate=.001, learning_rate_divisor=10):
         # use learning data set to train model
