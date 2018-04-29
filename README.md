@@ -22,7 +22,7 @@ If you are interested in giving feedback or contributing, please use the github 
 
 ## Author
 
-* **Miles Gordon* - (https://github.com/icanseeformiles)
+* **Miles Gordon** - (https://github.com/icanseeformiles)
 
 ## License
 
