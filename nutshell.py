@@ -2,6 +2,9 @@ import numpy as np
 import pandas as pd
 import pickle
 import csv
+import glob
+import errno
+import re
 
 from sklearn.preprocessing import Imputer, StandardScaler
 from sklearn.cluster import KMeans
@@ -146,10 +149,14 @@ class ModelData:
                     index_list.append(1)
                 
         return index_list
-    
-    def add_false_rows(self, deface_columns, percent_of_sequence=.10):
+  
+
+    def add_false_rows(self, deface_columns, percent_of_sequence=.15):
         # add negative samples to training data by defacing specific columns with false values
+        # 
         # label the new rows false (0)
+        
+        #self.prep_data[self.label_column] = 1 # label all true examples - dont assume this
         
         dfFalse = self.prep_data.copy(deep=True) # copy all true examples as a starting point (dont use pandas copy)
         dfFalse[self.label_column] = 0 # label all false examples
@@ -161,9 +168,9 @@ class ModelData:
         self.prep_data = pd.concat([self.prep_data, dfFalse], ignore_index=True)
         
     
-    def deface_column(self, data_series, is_sequence=False, percent_of_sequence=.10):
+    def deface_column(self, data_series, is_sequence=False, percent_of_sequence=.15):
         # to create negative/false samples with value distribution similar to input set
-        # for sequences, change a random x% of values in the sequence - where x = percent_of_sequence
+        # for sequences, change a random x% of values in the sequence - where x = modifySequence
 
         false_list = []
         
@@ -222,7 +229,7 @@ class ModelData:
             self.prep_data[col_name] = self.column_values_to_index(
                                         self.input_data[col_name], col_name, col_name in self.sequence_columns)
             
-            print(col_name, len(unique_values) - 2)
+            print(col_name, len(unique_values) - 2, 'unique values')
         
         # prepare numeric columns
         if len(self.numeric_columns) > 0:
@@ -648,5 +655,31 @@ class Representation:
         plt.show()
         
     
+class TextReader():
+        
+    def read_text_files(self, file_path):
+        
+        # read all files in file path - return a list of the text in each file
+    
+        texts = []
+        file_list = glob.glob(file_path)
+        for name in file_list:
+            try:
+                with open(name) as f:
+                    texts.append(f.read())
+            except IOError as exc:
+                if exc.errno != errno.EISDIR:
+                    raise  
+         
+        return texts
+
+    def multi_replace(self, text, replacements):
+        
+        rc = re.compile('|'.join(map(re.escape, replacements)))
+    
+        def translate(match):
+            return replacements[match.group(0)]
+        
+        return rc.sub(translate, text)    
     
             
