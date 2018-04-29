@@ -13,8 +13,8 @@ See the github wiki for details: https://github.com/icanseeformiles/nutshell/wik
 ### Prerequisites
 
 - Anaconda - Python 3.5+ - https://conda.io/docs/user-guide/install/index.html
-- Keras - https://keras.io/#installation
-- Tensorflow (optional) - https://www.tensorflow.org/install/
+- Keras - tested on ver 2.0.9 - https://keras.io/#installation
+- Tensorflow (optional) - tested on ver 1.4.0  -https://www.tensorflow.org/install/
 
 ## Contributing
 
