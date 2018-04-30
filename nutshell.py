@@ -605,9 +605,36 @@ class Predictor:
     def score(self):
         #make predictions and place them in the score_column
         
-        self.modeldata.prep_data[self.score_column] = self.model.predict(self.features, verbose=1)
+        self.modeldata.prep_data[self.score_column] = self.model.predict(self.features, verbose=1, batch_size=self.batch_size)
         print('')
         print('Done scoring')
+
+
+    def encode(self, include_key=False):
+        #instead of making predictions that return a single score, return a list of representation vectors
+        # returns in a format suitable to pass to Representation class constructor
+        
+        encoder = self.encoder_model()
+        vectors = encoder.predict(self.features, verbose=1, batch_size=self.batch_size)
+        
+        if include_key:
+            key_list = []
+            for i in range(0, len(vectors)):
+                v = self.modeldata.input_data[self.modeldata.key_column][i]
+                key_list.append(v)
+            vector_list = [vectors, key_list]
+            return vector_list
+        else:
+            return [vectors]
+        
+        return vectors
+    
+    def encoder_model(self):
+        # return a model with the dense_representation layer used as the output layer
+        
+        encoder = Model(inputs=self.model.inputs, outputs=self.model.get_layer('dense_representation').output)
+        encoder.compile(loss='mse', optimizer=Adam(), metrics=['acc'] )
+        return encoder
                
 class Representation:
     
