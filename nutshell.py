@@ -524,10 +524,29 @@ class Learner:
 
     def set_embedding(self, column_name, vectors):
         # load pre-trained embeddings
-        #  vectors should be in index order and match configured factor size
+        #  vectors parm should be passed in the form [vectors] or [vectors, keys] - a list of lists
+        #  if keys are passed, then only the vectors matching a category will be used
+        #  if not, then vectors should be in index order and match dictionary length exactly
         
         embed_layer = self.model.get_layer('embed_' + column_name)
-        embed_layer.set_weights(np.array([vectors]))
+        
+        if len(vectors)==2:
+            # keys passed - so look up each key in category dictionary
+            vec_dict = {}
+            for i in range(0,len(vectors[1])):
+                vec_dict[vectors[1][i]] = vectors[0][i]
+                           
+            use_vectors = []
+            for k in list(self.modeldata.value_index[column_name].keys()):
+                if k in vec_dict:
+                    use_vectors.append(vec_dict[k])
+                else:
+                    use_vectors.append(np.zeros(len(vectors[0][0])))
+        else:
+            # no keys passed so take full vector set in order
+            use_vectors = vectors[0]
+                                  
+        embed_layer.set_weights(np.array([use_vectors]))
         embed_layer.trainable=False
         
         self.model.compile(loss='mse', optimizer=Adam(), metrics=['acc'] )
