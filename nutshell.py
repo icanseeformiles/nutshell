@@ -274,8 +274,8 @@ class ModelData:
             normalized_column = scaler.transform(imputed_column[0][:, np.newaxis])
             self.prep_data[col_name] = normalized_column
         
-        # add label column (as is) to prepared data
-        if self.label_column in self.input_data.columns:
+        # add label column (as is) to prepared data if it is not already added
+        if self.label_column in self.input_data.columns and self.label_column not in self.prep_data.columns:
             self.prep_data[self.label_column] = self.input_data[self.label_column]
         
         #same with key column
