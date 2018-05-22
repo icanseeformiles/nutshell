@@ -109,12 +109,7 @@ class ModelData:
         # if each value is actually a list of values, handle that
         
         unique_values = []
-
-        # add two addition values for unknown and padding values
-        # unknown will only be used during inference, not training
-        unique_values.append('<pad>') # should be 0 index
-        unique_values.append('<unk>') # should be 1 index
-        
+      
         if is_sequence:
             seq = []
             for r in data_series.iteritems():
@@ -156,6 +151,8 @@ class ModelData:
         # 
         # label the new rows false (0)
         
+        print('Adding false rows')
+        
         #self.prep_data[self.label_column] = 1 # label all true examples - dont assume this
         
         dfFalse = self.prep_data.copy(deep=True) # copy all true examples as a starting point (dont use pandas copy)
@@ -166,12 +163,14 @@ class ModelData:
                 
         # add false rows to training data
         self.prep_data = pd.concat([self.prep_data, dfFalse], ignore_index=True)
+
+        print('Added', len(dfFalse), 'rows')
         
     
     def deface_column(self, data_series, is_sequence=False, percent_of_sequence=.15):
         # to create negative/false samples with value distribution similar to input set
         # for sequences, change a random x% of values in the sequence - where x = modifySequence
-
+        
         false_list = []
         
         # shuffle true value column to select random specimin values
@@ -219,8 +218,6 @@ class ModelData:
 
             if reset_metadata:
                 unique_values = self.unique_column_values(self.input_data[col_name], col_name in self.sequence_columns)           
-                #self.value_index[col_name] = dict((c,i) for i, c in enumerate(unique_values))
-                #self.index_value[col_name] = dict((i,c) for i, c in enumerate(unique_values))
                 self.set_category_values(col_name, unique_values)
             else:
                 unique_values = self.index_value[col_name].values()
@@ -229,7 +226,7 @@ class ModelData:
             self.prep_data[col_name] = self.column_values_to_index(
                                         self.input_data[col_name], col_name, col_name in self.sequence_columns)
             
-            print(col_name, len(unique_values) - 2, 'unique values')
+            print(col_name, len(unique_values) - (0 if col_name==self.label_column else 2), 'unique values')
         
         # prepare numeric columns
         if len(self.numeric_columns) > 0:
@@ -287,11 +284,14 @@ class ModelData:
     def set_category_values(self, column_name, unique_values):
         # override automatic categories for a single column
         
-        # stick padding and unknown values onto the front of the unique values list
+        # stick padding and unknown values onto the front of the unique values list (for non-label columns)
+       
         passed_values = unique_values.copy()
         unique_values = []
-        unique_values.append('<pad>') # should be 0 index
-        unique_values.append('<unk>') # should be 1 index
+        if column_name != self.label_column:
+            unique_values.append('<pad>') # should be 0 index
+            unique_values.append('<unk>') # should be 1 index
+            
         for v in passed_values:
             unique_values.append(v)
         
@@ -515,11 +515,21 @@ class Learner:
         # output layer size depends on whether label is binary or category
         if self.label_type == 'binary':
             dense_output = Dense(1, name='dense_output') (dense_representation)
+            self.model = Model(inputs=list(input_layers.values()), outputs=dense_output)
+            self.model.compile(loss='mse', optimizer=Adam(), metrics=['acc'] )
+        elif self.label_type == 'numeric':
+            dense_output = Dense(1, name='dense_output') (dense_representation)
+            self.model = Model(inputs=list(input_layers.values()), outputs=dense_output)
+            self.model.compile(loss='mse', optimizer=Adam(), metrics=['mean_absolute_error'] )            
+        elif self.label_type == 'category':
+            dense_output = Dense(len(self.modeldata.index_value[d.label_column]), name='dense_output', 
+                                activation='softmax') (dense_representation) # output values = cardinality of label column
+            self.model = Model(inputs=list(input_layers.values()), outputs=dense_output)
+            self.model.compile(loss='sparse_categorical_crossentropy', optimizer=Adam(), metrics=['acc'] )
         else:
-            dense_output = Dense(len(self.modeldata.index_value[d.label_column]), name='dense_output') (dense_representation) # output values = cardinality of label column
+            raise ValueError('Invalid Label Type - Valid types are binary, numeric, category')
 
-        self.model = Model(inputs=list(input_layers.values()), outputs=dense_output)
-        self.model.compile(loss='mse', optimizer=Adam(), metrics=['acc'] )
+
         print(self.model.summary())
 
     def set_embedding(self, column_name, vectors):
