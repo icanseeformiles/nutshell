@@ -24,6 +24,7 @@ class ModelDataSettings:
     
     def __init__(self):
         self.label_column = ''
+        self.label_type = ''
         self.key_column = ''
         self.category_columns = []
         self.numeric_columns = []
@@ -44,6 +45,7 @@ class ModelData:
         self.validation_features = []
         self.validation_labels = []
         self.label_column = ''
+        self.label_type = 'binary'
         self.key_column = '' # id column from input
         self.category_columns = [] #columns are either category or numeric but not both
         self.numeric_columns = []
@@ -68,6 +70,7 @@ class ModelData:
         settings = ModelDataSettings()
 
         settings.label_column = self.label_column
+        settings.label_type = self.label_type
         settings.key_column = self.key_column
         settings.category_columns = self.category_columns
         settings.numeric_columns = self.numeric_columns
@@ -89,6 +92,7 @@ class ModelData:
             settings = pickle.load(input)
             
         self.label_column = settings.label_column
+        self.label_type = settings.label_type
         self.key_column = settings.key_column
         self.category_columns = settings.category_columns
         self.numeric_columns = settings.numeric_columns
@@ -369,7 +373,7 @@ class Learner:
     def __init__(self, modeldata):       
         self.modeldata = modeldata
         self.hidden_layers = 2 # number of hidden dense/lstm layer sets to add not including rep/2d layers - min=1
-        self.label_type = 'binary' # or category
+        #self.label_type = 'binary' # or category
         self.model = None
         self.category_inputs = []
         self.category_factors = {} # of embedding factors for each category - each value corresponds to category_inputs value 
@@ -512,16 +516,16 @@ class Learner:
         dense_representation = Dense(self.output_factors, name='dense_representation') (mergeFinal)
         #dense2D = Dense(2, name='dense_2d') (dense_representation)
         
-        # output layer size depends on whether label is binary or category
-        if self.label_type == 'binary':
+        # output layer size depends on whether label is binary, numeric or category
+        if self.modeldata.label_type == 'binary':
             dense_output = Dense(1, name='dense_output') (dense_representation)
             self.model = Model(inputs=list(input_layers.values()), outputs=dense_output)
             self.model.compile(loss='mse', optimizer=Adam(), metrics=['acc'] )
-        elif self.label_type == 'numeric':
+        elif self.modeldata.label_type == 'numeric':
             dense_output = Dense(1, name='dense_output') (dense_representation)
             self.model = Model(inputs=list(input_layers.values()), outputs=dense_output)
             self.model.compile(loss='mse', optimizer=Adam(), metrics=['mean_absolute_error'] )            
-        elif self.label_type == 'category':
+        elif self.modeldata.label_type == 'category':
             dense_output = Dense(len(self.modeldata.index_value[d.label_column]), name='dense_output', 
                                 activation='softmax') (dense_representation) # output values = cardinality of label column
             self.model = Model(inputs=list(input_layers.values()), outputs=dense_output)
@@ -529,9 +533,19 @@ class Learner:
         else:
             raise ValueError('Invalid Label Type - Valid types are binary, numeric, category')
 
-
+        self.compile_model()
+            
         print(self.model.summary())
-
+    
+    def compile_model(self):
+        
+        if self.modeldata.label_type == 'binary':
+            self.model.compile(loss='mse', optimizer=Adam(), metrics=['acc'] )
+        elif self.modeldata.label_type == 'numeric':
+            self.model.compile(loss='mse', optimizer=Adam(), metrics=['mean_absolute_error'] )            
+        elif self.modeldata.label_type == 'category':
+            self.model.compile(loss='sparse_categorical_crossentropy', optimizer=Adam(), metrics=['acc'] )
+        
     def set_embedding(self, column_name, vectors):
         # load pre-trained embeddings
         #  vectors parm should be passed in the form [vectors] or [vectors, keys] - a list of lists
@@ -559,7 +573,7 @@ class Learner:
         embed_layer.set_weights(np.array([use_vectors]))
         embed_layer.trainable=False
         
-        self.model.compile(loss='mse', optimizer=Adam(), metrics=['acc'] )
+        self.compile_model()
         
     def train_model(self, filename='', epochs=1, super_epochs=1, learning_rate=.001, learning_rate_divisor=10):
         # use learning data set to train model
@@ -623,7 +637,7 @@ class Predictor:
         self.model = load_model(model_filename + '.h5')
         self.modeldata = modeldata
         self.score_column = 'score' # (new) column in modeldata.prep_data where predictions will be placed
-        self.labeltype = 'binary' # maybe we can know this from the model output shape
+        #self.labeltype = 'binary' # use modeldata.label_type
         self.features = None
         self.gpu = False
         self.batch_size = 32
@@ -634,7 +648,16 @@ class Predictor:
     def score(self):
         #make predictions and place them in the score_column
         
-        self.modeldata.prep_data[self.score_column] = self.model.predict(self.features, verbose=1, batch_size=self.batch_size)
+        if self.modeldata.label_type == 'binary' or self.modeldata.label_type == 'numeric':
+            self.modeldata.prep_data[self.score_column] = \
+                self.model.predict(self.features, verbose=1, batch_size=self.batch_size)
+        elif self.modeldata.label_type == 'category':
+            # for categories, include add one score column per category
+            predictions = self.model.predict(self.features, verbose=1, batch_size=self.batch_size)
+            for i in range(0, len(self.modeldata.index_value[self.modeldata.label_column])):
+                self.modeldata.prep_data[self.score_column + '_' + \
+                                         self.modeldata.index_value[self.modeldata.label_column][i]] = predictions[:,i]
+
         print('')
         print('Done scoring')
 
