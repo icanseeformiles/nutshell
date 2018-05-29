@@ -18,11 +18,11 @@ See the github wiki for details: https://github.com/icanseeformiles/nutshell/wik
 
 ## Contributing
 
-If you are interested in giving feedback or contributing, please use the github issues log for now.
+If you are interested in giving feedback or contributing, please direct message me on Twitter @milesgordontech or use the github issues log for now.
 
 ## Author
 
-* **Miles Gordon** - (https://github.com/icanseeformiles)
+* **Miles Gordon** - [@milesgordontech](https://twitter.com/milesgordontech)
 
 ## License
 
