@@ -30,6 +30,7 @@ class ModelDataSettings:
         self.numeric_columns = []
         self.sequence_columns = []
         self.sequence_length = 10
+        self.sequence_pad = 'post'
         self.value_index = {}
         self.index_value = {}
         self.imputers = {}
@@ -51,6 +52,7 @@ class ModelData:
         self.numeric_columns = []
         self.sequence_columns = [] # sequence columns are also in category or numeric column list
         self.sequence_length = 1 # max/pad length of sequences for training - all sequential cols have same length
+        self.sequence_pad = 'post' # which end of sequence to pad (pre/post)
         self.value_index = {} # dictionary of dictionaries - key is column name
         self.index_value = {} # above only in reverse
         self.validation_split = .10
@@ -76,6 +78,7 @@ class ModelData:
         settings.numeric_columns = self.numeric_columns
         settings.sequence_columns = self.sequence_columns
         settings.sequence_length = self.sequence_length
+        settings.sequence_pad = self.sequence_pad
         settings.value_index = self.value_index
         settings.index_value = self.index_value
         settings.imputers = self.imputers
@@ -98,6 +101,7 @@ class ModelData:
         self.numeric_columns = settings.numeric_columns
         self.sequence_columns = settings.sequence_columns
         self.sequence_length = settings.sequence_length
+        self.sequence_pad = settings.sequence_pad
         self.value_index = settings.value_index
         self.index_value = settings.index_value
         self.imputers = settings.imputers
@@ -122,6 +126,9 @@ class ModelData:
             unique_values = unique_values + list(set(seq))
         else:
             unique_values = unique_values + list(set(data_series))
+            
+        # change nan/null values to a string - because nan can't be used as a dictionary key
+        unique_values = ['nan' if x != x else x for x in unique_values]
             
         return unique_values
     
@@ -150,8 +157,9 @@ class ModelData:
         return index_list
   
 
-    def add_false_rows(self, deface_columns, percent_of_sequence=.15):
+    def add_false_rows(self, deface_columns, swap_sequence=False, percent_of_sequence=.15):
         # add negative samples to training data by defacing specific columns with false values
+        # swap_sequence=True means swap the entire sequence with another row; False means swap % of values in sequence
         # 
         # label the new rows false (0)
         
@@ -163,7 +171,7 @@ class ModelData:
         dfFalse[self.label_column] = 0 # label all false examples
         
         for col_name in deface_columns:
-            dfFalse[col_name] = self.deface_column(dfFalse[col_name], col_name in self.sequence_columns, percent_of_sequence)
+            dfFalse[col_name] = self.deface_column(dfFalse[col_name], col_name in self.sequence_columns and swap_sequence==False, percent_of_sequence)
                 
         # add false rows to training data
         self.prep_data = pd.concat([self.prep_data, dfFalse], ignore_index=True)
@@ -197,7 +205,7 @@ class ModelData:
         
         return false_list      
     
-    def prepare_data(self, reset_metadata=False):
+    def prepare_data(self, reset_metadata=False, verbose=True):
         # reset_metadata=True will rebuild category column token map and numeric column normalizers
         #  only use this during model training
 
@@ -219,9 +227,12 @@ class ModelData:
             # if column name is not in input_data then skip it (e.g. when label col is not in inference data)
             if col_name not in self.input_data.columns:
                 continue
+                
+            # set any NaN category values to '<null>' - python chokes on Nan as a dictionary key
+            self.input_data[col_name] = self.input_data[col_name].apply(lambda x: '<null>' if x!=x else x)
 
             if reset_metadata:
-                unique_values = self.unique_column_values(self.input_data[col_name], col_name in self.sequence_columns)           
+                unique_values = self.unique_column_values(self.input_data[col_name], col_name in self.sequence_columns) 
                 self.set_category_values(col_name, unique_values)
             else:
                 unique_values = self.index_value[col_name].values()
@@ -230,7 +241,8 @@ class ModelData:
             self.prep_data[col_name] = self.column_values_to_index(
                                         self.input_data[col_name], col_name, col_name in self.sequence_columns)
             
-            print(col_name, len(unique_values) - (0 if col_name==self.label_column else 2), 'unique values')
+            if verbose:
+                print(col_name, len(unique_values), 'unique values') #- (0 if col_name==self.label_column else 2)
         
         # prepare numeric columns
         if len(self.numeric_columns) > 0:
@@ -247,7 +259,8 @@ class ModelData:
             if col_name not in self.input_data.columns:
                 continue
                       
-            print(col_name)
+            if verbose:
+                print(col_name)
             
             # impute - fill in missing numeric values (nan) with mean of existing values
             #  scaler won't work if there are any NaN values in data
@@ -289,6 +302,7 @@ class ModelData:
         # override automatic categories for a single column
         
         # stick padding and unknown values onto the front of the unique values list (for non-label columns)
+        # but only if they're not already in the data
        
         passed_values = unique_values.copy()
         unique_values = []
@@ -297,7 +311,8 @@ class ModelData:
             unique_values.append('<unk>') # should be 1 index
             
         for v in passed_values:
-            unique_values.append(v)
+            if v!='<pad>' and v!='<unk>':
+                unique_values.append(v)
         
         self.value_index[column_name] = dict((c,i) for i, c in enumerate(unique_values))
         self.index_value[column_name] = dict((i,c) for i, c in enumerate(unique_values))
@@ -312,7 +327,7 @@ class ModelData:
         for col in dataframe:
             if col in self.sequence_columns:
                 padseq = sequence.pad_sequences(dataframe[col].values, maxlen=self.sequence_length, \
-                                  padding='post', truncating='post', value=0)
+                                  padding=self.sequence_pad, truncating=self.sequence_pad, value=0)
                 input_list.append(padseq)
 
             else:
@@ -417,7 +432,7 @@ class Learner:
         for c in self.category_inputs:
             embedding_layers[c] = Embedding(input_dim = len(d.index_value[c]), \
                                                 output_dim = self.category_factors[c], \
-                                                input_length = d.sequence_length, \
+                                                input_length = d.sequence_length if c in d.sequence_columns else 1, \
                                                 name='embed_' + c)
     
         # add factor layers - joining category input layer to category embedding layer + Reshape
@@ -520,7 +535,7 @@ class Learner:
         if self.modeldata.label_type == 'binary':
             dense_output = Dense(1, name='dense_output') (dense_representation)
             self.model = Model(inputs=list(input_layers.values()), outputs=dense_output)
-            self.model.compile(loss='mse', optimizer=Adam(), metrics=['acc'] )
+            #self.model.compile(loss='mse', optimizer=Adam(), metrics=['acc'] )
         elif self.modeldata.label_type == 'numeric':
             dense_output = Dense(1, name='dense_output') (dense_representation)
             self.model = Model(inputs=list(input_layers.values()), outputs=dense_output)
@@ -537,14 +552,20 @@ class Learner:
             
         print(self.model.summary())
     
-    def compile_model(self):
+    def compile_model(self, loss=''):
         
         if self.modeldata.label_type == 'binary':
-            self.model.compile(loss='mse', optimizer=Adam(), metrics=['acc'] )
+            ploss = 'mse' if loss=='' else loss
+            self.model.compile(loss=ploss, optimizer=Adam(), metrics=['acc'] )
+            print('Loss Function:', ploss)
         elif self.modeldata.label_type == 'numeric':
-            self.model.compile(loss='mse', optimizer=Adam(), metrics=['mean_absolute_error'] )            
+            ploss = 'mse' if loss=='' else loss
+            self.model.compile(loss=ploss, optimizer=Adam(), metrics=['mean_absolute_error'] )   
+            print('Loss Function:', ploss)
         elif self.modeldata.label_type == 'category':
-            self.model.compile(loss='sparse_categorical_crossentropy', optimizer=Adam(), metrics=['acc'] )
+            ploss = 'sparse_categorical_crossentropy' if loss=='' else loss
+            self.model.compile(loss=ploss, optimizer=Adam(), metrics=['acc'] )
+            print('Loss Function:', ploss)
         
     def set_embedding(self, column_name, vectors):
         # load pre-trained embeddings
@@ -573,9 +594,11 @@ class Learner:
         embed_layer.set_weights(np.array([use_vectors]))
         embed_layer.trainable=False
         
+        print('Recompiling model..')
         self.compile_model()
         
-    def train_model(self, filename='', epochs=1, super_epochs=1, learning_rate=.001, learning_rate_divisor=10):
+    def train_model(self, filename='', epochs=1, super_epochs=1, learning_rate=.001, learning_rate_divisor=10, 
+                    early_stopping='val_loss'):
         # use learning data set to train model
         # super epoch is another round of n epochs with the learning rate divided by the divisor
         # do not include file extension in filename
@@ -586,9 +609,9 @@ class Learner:
         # to-do if user passes filename, load the existing weights first if file exists
 
         if filename == '':
-            callbacks = [EarlyStopping('val_loss', patience=2)]
+            callbacks = [EarlyStopping(early_stopping, patience=2)]
         else:
-            callbacks = [EarlyStopping('val_loss', patience=2), \
+            callbacks = [EarlyStopping(early_stopping, patience=2), \
                      ModelCheckpoint(filename + '_weights.h5', save_best_only=True)]
 
         d = self.modeldata
