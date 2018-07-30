@@ -383,6 +383,81 @@ class ModelData:
         print('Validation examples:',len(self.validation_features[0]))
 
         
+    def estimate_column_types(self, category_max=100, exclude_columns=[], set_columns=True):
+
+        category = []
+        numeric = []
+        df = self.input_data
+
+        for col in df.columns:
+
+            if col in exclude_columns:
+                continue
+
+            row_count = df[col].count()
+            unique_values = df[col].nunique()
+
+            if df[col].dtype == 'int64' and unique_values == row_count:
+                category.append(col) # unique key
+            elif df[col].dtype == 'int64' or df[col].dtype == 'float64':
+                if unique_values <= category_max:
+                    category.append(col)
+                else:
+                    numeric.append(col)
+            else:
+                category.append(col)
+                
+        if set_columns:
+            self.category_columns = category
+            self.numeric_columns = numeric
+
+        return category, numeric 
+
+    
+    def column_importance(self):
+    
+        m = self
+        d = self.prep_data
+        f = m.category_columns + m.numeric_columns 
+        x = d[f].as_matrix()
+        y = d[m.label_column]
+
+        print('Calculating feature/column importance. This could take a while on large datasets...')
+
+        from sklearn.ensemble import GradientBoostingClassifier
+        gbm = GradientBoostingClassifier(max_depth=3, n_estimators=300, learning_rate=0.05).fit(x,y)    
+
+        imp = gbm.feature_importances_
+        out = []
+        for j in range(0,len(f)):
+            col_type = 'category' if f[j] in m.category_columns else 'numeric'
+            out.append([col_type, f[j], imp[j]]) 
+
+        dfOut = pd.DataFrame()
+        dfOut['column_name'] = [i[1] for i in out]
+        dfOut['column_type'] = [i[0] for i in out]
+        dfOut['importance'] = [i[2] for i in out]
+
+        return dfOut  
+
+    def remove_unimportant_columns(self, column_importance, min_importance=.0001, verbose=True):
+    
+        remove_count = 0
+        for r in column_importance.itertuples():
+            if r.importance < min_importance:
+                
+                if verbose:
+                    print('Removing column', r.column_name, r.importance)
+                remove_count += 1
+                
+                if r.column_type=='category':
+                    self.category_columns.remove(r.column_name)
+                else:
+                    self.numeric_columns.remove(r.column_name)
+
+        if verbose:
+            print('Removed', remove_count, 'columns')
+          
 class Learner:
     
     def __init__(self, modeldata):       
@@ -727,6 +802,13 @@ class Representation:
         
         if len(embeddings) > 1 :            
             self.keys = embeddings[1]
+
+    def dictionary():
+        d = {}
+        for i in keys:
+            d[self.keys[i]] = self.values[i]
+        
+        return d
 
     def calculate_clusters(self, cluster_count):
         
