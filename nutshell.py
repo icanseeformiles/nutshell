@@ -167,7 +167,8 @@ class ModelData:
         
         #self.prep_data[self.label_column] = 1 # label all true examples - dont assume this
         
-        dfFalse = self.prep_data.copy(deep=True) # copy all true examples as a starting point (dont use pandas copy)
+        dfTrue = self.prep_data[self.prep_data[self.label_column]==1]
+        dfFalse = dfTrue.copy(deep=True) # copy all true examples as a starting point (dont use pandas copy)
         dfFalse[self.label_column] = 0 # label all false examples
         
         for col_name in deface_columns:
