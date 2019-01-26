@@ -286,7 +286,7 @@ class ModelData:
             else:
                 scaler = self.scalers[col_name]
                 
-            normalized_column = scaler.transform(imputed_column[0][:, np.newaxis])
+            normalized_column = scaler.transform(imputed_column[0][:, np.newaxis]).reshape(len(self.input_data[col_name]))
             self.prep_data[col_name] = normalized_column
         
         # add label column (as is) to prepared data if it is not already added
@@ -349,13 +349,35 @@ class ModelData:
                 feature_names.append(c)
         
         return feature_names
-        
-    def split_data(self, shuffle=True):
+
+    def balance_labels(self, df, label_column):
+
+        # get a list of each unique label value, and the count
+        dfClasses = df.groupby(label_column).count().reset_index().iloc[:,0:2] 
+        dfClasses.columns = ['label_value', 'label_count']
+
+        # take the smallest count and make a dataset with an equal count of each class
+        minClassCount = dfClasses['label_count'].min()
+        dfOut = pd.DataFrame()
+        for c in dfClasses.itertuples():
+            dfOut = dfOut.append(df[df[label_column]==c.label_value].sample(n=minClassCount))
+
+        return dfOut.copy().reset_index()
+
+    
+    def split_data(self, shuffle=True, balance_classes=False):
         
         # split prep_data into training and validation set
         # it's best to shuffle the order of the data rows so validation set is random sample
         #  unless there is some reason not to e.g. train on jan-may, validate on june
+        #  another reason not to shuffle is if you want to re-split/sample multiple times during training
+
+        # blance_rows - if 0 does nothing, if > 0 creates an equal number of rows for each unique label value (category)
+        # a random sample will be taken from each class with n rows. 
         
+        if shuffle and balance_classes:
+            raise Exception('Cannot shuffle and balance. The validation set must remain fixed.')
+                    
         feature_names = self.feature_names() # features are those columns that are not the label column
 
         training_data = None
@@ -374,6 +396,11 @@ class ModelData:
             training_data = self.prep_data[:-validation_rows]
             validation_data = self.prep_data[-validation_rows:]
             
+        if balance_classes:
+            print('Balancing classes...')
+            training_data = self.balance_labels(training_data, self.label_column)
+            validation_data = self.balance_labels(validation_data, self.label_column)
+
         # convert dataframe values to keras input
         self.training_features = self.dataframe_to_input(training_data[feature_names])
         self.training_labels = self.dataframe_to_input(training_data[[self.label_column]])
@@ -674,10 +701,11 @@ class Learner:
         self.compile_model()
         
     def train_model(self, filename='', epochs=1, super_epochs=1, learning_rate=.001, learning_rate_divisor=10, 
-                    early_stopping='val_loss'):
+                    early_stopping='val_loss', resample=False):
         # use learning data set to train model
         # super epoch is another round of n epochs with the learning rate divided by the divisor
         # do not include file extension in filename
+        # resample will call modeldata.split(balance_classes=True) between each super epoch
         
         # save modeldata settings (including tokenization maps) to a file to be used later during inference
         self.modeldata.save_settings(filename + '_settings')
@@ -703,6 +731,9 @@ class Learner:
                            epochs=epochs, callbacks=callbacks)
             
             learning_rate = learning_rate / learning_rate_divisor
+            
+            if resample:
+                d.split_data(shuffle=False, balance_classes=True) # get a new random sample of examples with class count balanced
             
         # save model
         if filename != '':
